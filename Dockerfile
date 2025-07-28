@@ -3,13 +3,9 @@ FROM node:20 as build-assets
 
 WORKDIR /var/www/html
 
-# Copia package.json y package-lock.json
 COPY package.json package-lock.json vite.config.js ./
-
-# Instala dependencias
 RUN npm install
 
-# Copia el resto del código
 COPY . .
 
 # Ejecutamos el build de Vite
@@ -33,56 +29,61 @@ RUN apt-get update && apt-get install -y \
     libmagickwand-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Activamos mod_rewrite y otros módulos
-RUN a2enmod rewrite headers expires mime setenvif
+# Activamos mod_rewrite y encabezados
+RUN a2enmod rewrite headers expires mime
 
-# Instalamos extensiones PHP
+# Si usas proxy inverso o quieres soporte completo de X-Forwarded-Proto
+RUN a2enmod setenvif
+
+# Instalamos extensiones PHP necesarias para Laravel
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath opcache
 
-# Instalar Imagick
+# Instalar extensión imagick
 RUN pecl install imagick && docker-php-ext-enable imagick
 
-# Instalar Composer
+# Instalamos Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Directorio de trabajo
+# Configuración del directorio de trabajo
 WORKDIR /var/www/html
 
-# Copiamos solo los archivos necesarios
+# Copiamos archivos del proyecto
 COPY . .
 
-# Copiamos los assets construidos
+# Copiamos solo los archivos compilados desde la fase de build
 COPY --from=build-assets /var/www/html/public/build public/build
 COPY --from=build-assets /var/www/html/public/build/manifest.json public/build/manifest.json
 
-# Configuración de Apache
 COPY .docker/apache/000-default.conf /etc/apache2/sites-available/000-default.conf
 
-# Permisos
+# Asegúrate de que el directorio public esté presente
+RUN mkdir -p /var/www/html/public
+
 RUN chown -R www-data:www-data /var/www/html && \
     chmod -R 755 /var/www/html
 
-# Directorios de storage
-RUN mkdir -p /var/www/html/storage/app/public && \
-    chown -R www-data:www-data /var/www/html/storage && \
-    chmod -R 755 /var/www/html/storage
+RUN mkdir -p /var/www/html/storage/app/public \
+    && chown -R www-data:www-data /var/www/html/storage \
+    && chmod -R 755 /var/www/html/storage
 
-# Instalar dependencias PHP
-RUN composer install --optimize-autoloader --no-dev --no-scripts
+# Instalamos dependencias de PHP
+RUN composer install
 
-# Generar clave y enlazar storage
-RUN php artisan key:generate --force
-RUN php artisan storage:link
+# Ahora generamos la APP_KEY solo si no existe
+# RUN cp .env.production .env && php artisan key:generate --force
 
-# Caché (opcional en producción)
-# RUN php artisan config:cache
-# RUN php artisan route:cache
-# RUN php artisan view:cache
+RUN php artisan storage:link 
 
-# Script de inicio
+# Caché de configuración
+# RUN php artisan view:cache \
+#     && php artisan event:cache \
+#     && php artisan optimize
+
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
+# Exponemos puerto 80
 EXPOSE 80
 
+# Comando final para arrancar Apache
 CMD ["/start.sh"]
